@@ -1,6 +1,6 @@
 Privacy Statement
 
-Last updated October 8rd, 2015
+Last updated October 8th, 2015
 
 All custom PowerBI visuals created, authored, and provided directly by
 Chris Caruso do not collect data, AT ALL, independently of the PowerBI
