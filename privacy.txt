@@ -1,0 +1,15 @@
+Privacy Statement
+
+Last updated October 8rd, 2015
+
+All custom PowerBI visuals created, authored, and provided directly by
+Chris Caruso do not collect data, AT ALL, independently of the PowerBI
+service. Therefore, I defer all responsibility regarding data privacy
+and cookie usage to PowerBI, and take no responsibility for how data is
+used by the PowerBI service. Additionally, these visuals provided do
+not store cookies independently of the PowerBI service, similarly, I
+defer all responsibility regarding cookie usage to PowerBI. Please
+refer to the PowerBI Privacy Statement for information regarding their
+data privacy and cookie statements. To be clear, I, Chris Caruso, do not
+collect data or store cookies through the use of visuals I have directly
+created, authored, and provided, independent of the PowerBI service.
