@@ -24,107 +24,303 @@ THE SOFTWARE.
 
 module powerbi.visuals {
 
-    export class VoronoiMapDataPointRenderer extends MapBubbleDataPointRenderer {
+	export interface StreamChartDataPoint extends LineChartDataPoint {
+        stackedValue: number;
+        stackedValueBelow: number;
+    }
 
-        public updateInternal(data: MapData, viewport: IViewport, dataChanged: boolean): MapBehaviorOptions {
+    export class StackChart extends LineChart {
 
-            if ((<any>this).svg) {
-                (<any>this).svg
-                    .style("width", viewport.width.toString() + "px")
-                    .style("height", viewport.height.toString() + "px");
-            }
-            if ((<any>this).clearSvg) {
-                (<any>this).clearSvg
-                    .style("width", viewport.width.toString() + "px")
-                    .style("height", viewport.height.toString() + "px");
-            }
+        protected dataView: DataView;
+        protected previousInterpolationMode: string;
 
-            var hasSelection = (<any>this).interactivityService && (<any>this).interactivityService.hasSelection();
+        constructor(options: CartesianVisualConstructorOptions) {
 
-            var voronoi = d3.geom.voronoi()
-                .x((d: MapBubble) => d.x)
-                .y((d: MapBubble) => d.y)
-                .clipExtent([[0, 0], [viewport.width, viewport.height]]);
+            var streamOptions: LineChartConstructorOptions = options;
 
-            var voronoiPolygons = voronoi(data.bubbleData);
+            this.previousInterpolationMode = null;
 
-            var maxRadius = _.max(data.bubbleData, d => d.radius).radius;
+            super(streamOptions);
 
-            var line = d3.svg.line()
-                .x(d => d[0])
-                .y(d => d[1]);
+			this.initialize();
+        }
 
-            var polyPath = (<any>this).bubbleGraphicsContext
-                .selectAll("path")
-                .data(voronoiPolygons, d => line(d));
+        public setData(dataViews: DataView[]): void {
+            super.setData(dataViews);
 
-            polyPath.enter().append("path")
-                .style({
-                    'stroke-width': '2px',
-                    'stroke': d => d.point.fill,
-                    'fill': d => d.point.fill,
-                    'fill-opacity': d => d.point.radius / maxRadius * ColumnUtil.getFillOpacity(d.point.selected, false, hasSelection, false)
-                })
-                .attr('d', d => line(d));
+            this.dataView = dataViews[0];
 
-            polyPath.order();
-
-            polyPath.exit().remove();
-
-            var markers = (<any>this).bubbleGraphicsContext
-                .selectAll(".bubble")
-                .data(data.bubbleData, (d: MapBubble) => d.identity.getKey());
-
-            markers.enter()
-                .append('circle')
-                .classed('bubble', true);
-
-            markers
-                .style({
-                    'fill': (d: MapBubble) => d.fill,
-                    'fill-opacity': (d: MapBubble) => ColumnUtil.getFillOpacity(d.selected, false, hasSelection, false),
-                    'cursor': 'default'
-                })
-                .attr({
-                    r: d => d.radius / 2,
-                    cx: d => d.x,
-                    cy: d => d.y,
+            var stack = d3.layout.stack()
+                .values((d: LineChartSeries) => d.data)
+                .x((d: LineChartDataPoint) => (<any>this).getXValue(d))
+                .y((d: LineChartDataPoint) => d.value)
+                .out((d: StreamChartDataPoint, y0: number, y: number) => {
+                    d.stackedValueBelow = y0;
+                    d.stackedValue = y0 + y;
+                    d.value = d.stackedValue;
                 });
 
-            markers.exit().remove();
+            (<any>this).data.series = stack((<any>this).data.series);
+        }
 
-            TooltipManager.addTooltip(markers, (tooltipEvent: TooltipEvent) => tooltipEvent.data.tooltipInfo);
+		private initialize() {
 
-            var behaviorOptions: MapBehaviorOptions = {
-                bubbles: markers,
-                slices: (<any>this).sliceGraphicsContext.selectAll("path"),
-                clearCatcher: (<any>this).clearCatcher,
-                dataPoints: data.bubbleData.slice(),
+			var superRenderNew = (<any>this).renderNew;
+
+			(<any>this).renderNew = (duration: number) => {
+	            var data = (<any>this).clippedData ? (<any>this).clippedData : (<any>this).data;
+	            if (!data)
+	                return;
+
+	            var margin = (<any>this).margin;
+	            var viewport = (<any>this).currentViewport;
+	            var height = viewport.height - (margin.top + margin.bottom);
+
+	            var xScale = (<any>this).xAxisProperties.scale;
+	            var yScale = (<any>this).yAxisProperties.scale;
+
+	            var hasSelection = data.hasSelection;
+
+	            var area = d3.svg.area()
+	                .x((d: StreamChartDataPoint) => xScale((<any>this).getXValue(d)))
+	                .y0((d: StreamChartDataPoint) => {
+	                    var y0 = yScale(d.stackedValueBelow);
+	                    return y0 <= height ? y0 : height;
+	                })
+	                .y1((d: StreamChartDataPoint) => yScale(d.stackedValue))
+	                .defined((d: StreamChartDataPoint) => d.stackedValue !== null)
+	                .interpolate('cardinal');
+
+
+	            var line = d3.svg.line()
+	                .x((d: StreamChartDataPoint) => xScale((<any>this).getXValue(d)))
+	                .y((d: StreamChartDataPoint) => {
+	                    var y0 = yScale(d.stackedValue);
+	                    return y0 <= height ? y0 : height;
+	                })
+	                .defined((d: StreamChartDataPoint) => d.stackedValue !== null)
+	                .interpolate('cardinal');
+
+	            var extraLineShift = (<any>this).extraLineShift();
+
+	            (<any>this).mainGraphicsContext
+	                .attr('transform', SVGUtil.translate(extraLineShift, 0));
+
+	            (<any>this).mainGraphicsContext
+	                .attr('height', (<any>this).getAvailableHeight())
+	                .attr('width', (<any>this).getAvailableWidth());
+
+	            (<any>this).toolTipContext
+	                .attr('transform', SVGUtil.translate(extraLineShift, 0));
+
+	            var areas = (<any>this).mainGraphicsContext.selectAll('.catArea').data(data.series, (d: LineChartSeries) => d.identity.getKey());
+	            areas.enter()
+	                .append('path')
+	                .classed('catArea', true);
+
+	            areas
+	                .style('fill', (d: LineChartSeries) => d.color)
+	                .style('fill-opacity', (d: LineChartSeries) => (hasSelection && !d.selected) ? LineChart.DimmedAreaFillOpacity : LineChart.AreaFillOpacity)
+	                .transition()
+	                .ease('linear')
+	                .duration(duration)
+	                .attr('d', (d: LineChartSeries) => area(d.data));
+
+	            areas.exit()
+	                .remove();
+
+	            var lineSeries = data.series.slice();
+
+	            var bottomSeries = <any>_.min(lineSeries, s => _.reduce((<any>s).data, (i, d) => i + (<StreamChartDataPoint>d).stackedValueBelow, 0));
+
+	            var bottomLineSeries: LineChartSeries = {
+	                key: bottomSeries.key + bottomSeries.key,
+	                lineIndex: lineSeries.length,
+	                color: bottomSeries.color,
+	                xCol: bottomSeries.xCol,
+	                yCol: bottomSeries.yCol,
+	                identity: bottomSeries.identity,
+	                selected: bottomSeries.selected,
+	                data: _.map(bottomSeries.data, (d: any) => <StreamChartDataPoint>{
+	                    categoryValue: d.categoryValue,
+	                    value: (<StreamChartDataPoint>d).stackedValueBelow,
+	                    stackedValue: (<StreamChartDataPoint>d).stackedValueBelow,
+	                    stackedValueBelow: (<StreamChartDataPoint>d).stackedValueBelow,
+	                    categoryIndex: d.categoryIndex,
+	                    seriesIndex: lineSeries.length,
+	                    key: d.key + d.key
+	                })
+	            };
+
+	            var lines = (<any>this).mainGraphicsContext.selectAll(".line").data(lineSeries, (d: LineChartSeries) => d.key === bottomLineSeries.key ? d.key : d.identity.getKey());
+	            lines.enter()
+	                .append('path')
+	                .classed('line', true);
+	            lines
+	                .style('stroke', (d: LineChartSeries) => d.color)
+	                .style('stroke-opacity', (d: LineChartSeries) => ColumnUtil.getFillOpacity(d.selected, false, hasSelection, false))
+	                .transition()
+	                .ease('linear')
+	                .duration(duration)
+	                .attr('d', (d: LineChartSeries) => line(d.data));
+	            lines.exit()
+	                .remove();
+
+	            var interactivityLines;
+	            if ((<any>this).interactivityService) {
+	                interactivityLines = (<any>this).mainGraphicsContext.selectAll(".interactivity-line").data(lineSeries, (d: LineChartSeries) => d.key === bottomLineSeries.key ? d.key : d.identity.getKey());
+	                interactivityLines.enter()
+	                    .append('path')
+	                    .classed('interactivity-line', true);
+	                interactivityLines
+	                    .attr('d', (d: LineChartSeries) => {
+	                        return line(d.data);
+	                    });
+	                interactivityLines.exit()
+	                    .remove();
+	            }
+
+	            var dotGroups = (<any>this).mainGraphicsContext.selectAll('.cat')
+	                .data(data.series, (d: LineChartSeries) => d.identity.getKey());
+
+	            dotGroups.enter()
+	                .append('g')
+	                .classed('cat', true);
+
+	            dotGroups.exit()
+	                .remove();
+
+	            var dots = dotGroups.selectAll('.dot')
+	                .data((series: LineChartSeries) => {
+	                    return series.data.filter((value: LineChartDataPoint, i: number) => {
+	                        return (<any>this).shouldDrawCircle(series, i);
+	                    });
+	                }, (d: LineChartDataPoint) => d.key);
+	            dots.enter()
+	                .append('circle')
+	                .classed('dot', true);
+	            dots
+	                .style('fill', function () {
+	                    var lineSeries = d3.select(this.parentNode).datum();
+	                    return lineSeries.color;
+	                })
+	                .style('fill-opacity', function () {
+	                    var lineSeries = d3.select(this.parentNode).datum();
+	                    return ColumnUtil.getFillOpacity(lineSeries.selected, false, hasSelection, false);
+	                })
+	                .transition()
+	                .duration(duration)
+	                .attr({
+	                    cx: (d: LineChartDataPoint, i: number) => xScale((<any>this).getXValue(d)),
+	                    cy: (d: LineChartDataPoint, i: number) => yScale(d.value),
+	                    r: 4
+	                });
+	            dots.exit()
+	                .remove();
+	
+	            if (data.dataLabelsSettings.show) {
+	                var layout = dataLabelUtils.getLineChartLabelLayout(xScale, yScale, data.dataLabelsSettings, data.isScalar, (<any>this).yAxisProperties.formatter);
+	                var dataPoints: LineChartDataPoint[] = [];
+
+	                for (var i = 0, ilen = data.series.length; i < ilen; i++) {
+	                    Array.prototype.push.apply(dataPoints, data.series[i].data);
+	                }
+
+	                dataLabelUtils.drawDefaultLabelsForDataPointChart(dataPoints, (<any>this).mainGraphicsSVG, layout, (<any>this).currentViewport, duration > 0, duration);
+	                (<any>this).mainGraphicsSVG.select('.labels').attr('transform', SVGUtil.translate(extraLineShift, 0));
+	            }
+	            else {
+	                dataLabelUtils.cleanDataLabels((<any>this).mainGraphicsSVG);
+	            }
+
+				var behaviorOptions = undefined;
+				var dataPointsToBind = undefined;
+
+	            if ((<any>this).interactivityService) {
+	                var seriesTooltipApplier = (tooltipEvent: TooltipEvent) => {
+	                    var pointX: number = tooltipEvent.elementCoordinates[0];
+	                    return LineChart.getTooltipInfoByPointX(this, tooltipEvent.data, pointX);
+	                };
+	                TooltipManager.addTooltip(interactivityLines, seriesTooltipApplier, true);
+	                TooltipManager.addTooltip(areas, seriesTooltipApplier, true);
+	                TooltipManager.addTooltip(dots, (tooltipEvent: TooltipEvent) => tooltipEvent.data.tooltipInfo, true);
+
+	                dataPointsToBind = lineSeries.slice();
+	                for (var i = 0, ilen = data.series.length; i < ilen; i++) {
+	                    dataPointsToBind = dataPointsToBind.concat(lineSeries[i].data);
+	                }
+	                behaviorOptions = {
+	                    dataPoints: dataPointsToBind,
+	                    lines: lines,
+	                    interactivityLines: interactivityLines,
+	                    dots: dots,
+	                    areas: areas,
+	                    background: d3.selectAll((<any>this).element.toArray())
+	                };
+	            }
+
+				return { dataPoints: dataPointsToBind, behaviorOptions: behaviorOptions };
+	        }
+		}
+    }
+
+	export class StackCartesianChart extends CartesianChart implements IVisual {
+
+		public update(options: VisualUpdateOptions) {
+
+            if ((<any>this).layers.length === 0)
+			    (<any>this).layers = this.createLayers(options.dataViews);
+
+			super.update(options);
+		}
+
+		protected createLayers(dataViews: DataView[]) {
+			var layers = [];
+
+			var objects: DataViewObjects;
+            if (dataViews && dataViews.length > 0) {
+                var dataViewMetadata = dataViews[0].metadata;
+                if (dataViewMetadata)
+                    objects = dataViewMetadata.objects;
+            }
+
+			var cartesianOptions: CartesianVisualConstructorOptions = {
+                isScrollable: (<any>this).isScrollable,
+                animator: (<any>this).animator,
+                interactivityService: (<any>this).interactivityService,
             };
-            return behaviorOptions;
-        }
-    }
 
-    export class VoronoiMap extends Map implements IVisual {
+			var stackChart = new StackChart(cartesianOptions);
 
-        constructor(options) {
-            super(options);
+			layers.push(stackChart);
 
-            (<any>this).dataPointRenderer = new VoronoiMapDataPointRenderer();
-            (<any>this).enableGeoShaping = false;
-        }
-    }
+			var cartesianInitOptions = <CartesianVisualInitOptions>Prototype.inherit((<any>this).visualInitOptions);
+            cartesianInitOptions.svg = (<any>this).axisGraphicsContextScrollable;
+            cartesianInitOptions.cartesianHost = {
+                updateLegend: data => (<any>this).legend.drawLegend(data, (<any>this).currentViewport),
+                getSharedColors: () => (<any>this).sharedColorPalette,
+            };
+
+			stackChart.init(cartesianInitOptions);
+
+			return layers;
+		}
+	}
 }
 
 module powerbi.visuals.plugins {
 
-    export var _VoronoiMap: IVisualPlugin = {
-        name: '_VoronoiMap',
-        class: '_VoronoiMap',
-        capabilities: mapCapabilities,
-        create: () => new VoronoiMap({
-            behavior: new MapBehavior()
-        })
+	export var _StackChart: IVisualPlugin = {
+        name: '_StackChart',
+        class: '_StackChart',
+        capabilities: capabilities.lineChart,
+        create: () => new StackCartesianChart({
+			chartType: <any>'Stack',
+			isScrollable: true,
+			animator: new BaseAnimator(),
+			behavior: new CartesianChartBehavior([new LineChartWebBehavior()]),
+			seriesLabelFormattingEnabled: true
+            })
     };
 
 }
